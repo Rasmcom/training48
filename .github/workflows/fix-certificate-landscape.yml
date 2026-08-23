@@ -1,0 +1,49 @@
+name: Fix certificate landscape
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-certificate-landscape.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch certificate print orientation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          html = p.read_text(encoding='utf-8')
+
+          old = '''    @media print{\n      @page{size:A4 portrait;margin:0}\n      html,body{background:#fff;margin:0;padding:0;overflow:hidden}\n      body.printing > *:not(#printRoot){display:none!important}\n      #printRoot{display:block!important;position:fixed;inset:0;z-index:9999;background:#fff}\n      body.printing.landscape #printRoot{width:297mm!important;height:210mm!important}\n      body.printing.portrait #printRoot{width:210mm!important;height:297mm!important}\n    }\n'''
+          new = '''    @page portraitPage{size:210mm 297mm;margin:0}\n    @page landscapePage{size:297mm 210mm;margin:0}\n    @media print{\n      html,body{background:#fff!important;margin:0!important;padding:0!important;overflow:hidden!important}\n      body.printing > *:not(#printRoot){display:none!important}\n      #printRoot{display:block!important;position:fixed!important;inset:0!important;z-index:9999;background:#fff!important;margin:0!important;padding:0!important}\n      body.printing.portrait #printRoot{width:210mm!important;height:297mm!important;min-width:210mm!important;min-height:297mm!important}\n      body.printing.portrait #printRoot>.print-page{page:portraitPage;width:210mm!important;height:297mm!important;min-height:297mm!important;max-width:210mm!important;max-height:297mm!important;margin:0!important}\n      body.printing.landscape #printRoot{width:297mm!important;height:210mm!important;min-width:297mm!important;min-height:210mm!important}\n      body.printing.landscape #printRoot>.print-page.landscape{page:landscapePage;width:297mm!important;height:210mm!important;min-width:297mm!important;min-height:210mm!important;max-width:297mm!important;max-height:210mm!important;margin:0!important;overflow:hidden!important}\n    }\n'''
+          if old not in html:
+              raise SystemExit('Expected print CSS block not found')
+          html = html.replace(old, new, 1)
+
+          old2 = "  dynamic.textContent = orientation==='landscape' ? '@page{size:A4 landscape;margin:0}' : '@page{size:A4 portrait;margin:0}';"
+          new2 = """  dynamic.textContent = orientation==='landscape'\n    ? '@page{size:297mm 210mm;margin:0} @media print{body.printing.landscape,#printRoot,#printRoot>.print-page.landscape{width:297mm!important;height:210mm!important;min-width:297mm!important;min-height:210mm!important;max-width:297mm!important;max-height:210mm!important;margin:0!important;padding:0!important}}'\n    : '@page{size:210mm 297mm;margin:0} @media print{body.printing.portrait,#printRoot,#printRoot>.print-page{width:210mm!important;height:297mm!important;min-width:210mm!important;min-height:297mm!important;max-width:210mm!important;max-height:297mm!important;margin:0!important}}';"""
+          if old2 not in html:
+              raise SystemExit('Expected dynamic @page rule not found')
+          html = html.replace(old2, new2, 1)
+
+          old3 = '.print-page.landscape{width:297mm;min-height:210mm;height:210mm;grid-template-rows:10mm 1fr 16mm}'
+          new3 = '.print-page.landscape{width:297mm;min-width:297mm;max-width:297mm;min-height:210mm;height:210mm;max-height:210mm;grid-template-rows:10mm 1fr 16mm;margin:0 auto;overflow:hidden}'
+          if old3 not in html:
+              raise SystemExit('Expected landscape page rule not found')
+          html = html.replace(old3, new3, 1)
+
+          p.write_text(html, encoding='utf-8')
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "Fix certificate landscape print orientation"
+          git push
