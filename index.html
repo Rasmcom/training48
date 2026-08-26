@@ -10,7 +10,7 @@
   </style>
 </head>
 <body>
-  <iframe id="app" src="app-current.html?v=20260823-landscape" title="منصة التدريب والنمو المهني"></iframe>
+  <iframe id="app" src="app-current.html?v=20260827-importfix" title="منصة التدريب والنمو المهني"></iframe>
   <script>
     const frame=document.getElementById('app');
     frame.addEventListener('load',()=>{
@@ -39,30 +39,127 @@
           root.innerHTML=html;
           d.body.classList.remove('portrait','landscape');
           d.body.classList.add('printing',orientation);
-
           let dynamic=d.getElementById('dynamicPrintPage');
           if(!dynamic){dynamic=d.createElement('style');dynamic.id='dynamicPrintPage';d.head.appendChild(dynamic)}
           dynamic.textContent=orientation==='landscape'
             ? '@page{size:297mm 210mm!important;margin:0!important}@media print{html,body{width:297mm!important;height:210mm!important}body.printing.landscape,#printRoot,#printRoot>.print-page.landscape{width:297mm!important;min-width:297mm!important;max-width:297mm!important;height:210mm!important;min-height:210mm!important;max-height:210mm!important;margin:0!important;padding:0!important;overflow:hidden!important}}'
             : '@page{size:210mm 297mm!important;margin:0!important}@media print{html,body{width:210mm!important;height:297mm!important}body.printing.portrait,#printRoot,#printRoot>.print-page{width:210mm!important;min-width:210mm!important;max-width:210mm!important;height:297mm!important;min-height:297mm!important;max-height:297mm!important;margin:0!important}}';
-
           const images=[...root.querySelectorAll('img')];
           await Promise.all(images.map(img=>new Promise(resolve=>{
             if(img.complete&&img.naturalWidth>0){if(img.decode){img.decode().then(resolve).catch(resolve)}else resolve();return}
-            const finish=()=>resolve();
-            img.addEventListener('load',finish,{once:true});
-            img.addEventListener('error',finish,{once:true});
-            setTimeout(finish,1500);
+            const finish=()=>resolve();img.addEventListener('load',finish,{once:true});img.addEventListener('error',finish,{once:true});setTimeout(finish,1500);
           })));
           if(d.fonts&&d.fonts.ready){try{await d.fonts.ready}catch(e){}}
           await new Promise(r=>w.requestAnimationFrame(()=>w.requestAnimationFrame(r)));
           await new Promise(r=>setTimeout(r,250));
-
           const done=()=>{d.body.classList.remove('printing','portrait','landscape');root.innerHTML='';w.removeEventListener('afterprint',done)};
-          w.addEventListener('afterprint',done);
-          w.print();
+          w.addEventListener('afterprint',done);w.print();
         };
-      }catch(e){console.error('print patch failed',e)}
+
+        const importerPatch=d.createElement('script');
+        importerPatch.textContent=`
+          (function(){
+            function normImportHeader(v){
+              return String(v==null?'':v)
+                .replace(/[\\u064B-\\u065F\\u0670]/g,'')
+                .replace(/ـ/g,'')
+                .replace(/[أإآ]/g,'ا')
+                .replace(/ى/g,'ي')
+                .replace(/ة/g,'ه')
+                .replace(/[\\s\\-_\\/\\\\|:：.،,()\\[\\]{}]+/g,'')
+                .trim().toLowerCase();
+            }
+            function nameColumnIndex(row){
+              if(!Array.isArray(row))return -1;
+              for(let i=0;i<row.length;i++){
+                const h=normImportHeader(row[i]);
+                if(!h)continue;
+                if(h==='الاسم'||h==='اسم'||h==='الاسمالكامل'||h==='الاسمالرباعي'||h==='اسمالمعلمه'||h==='اسمالمعلم'||h==='اسمالمعلمالمعلمه'||h==='اسمالموظفه'||h==='اسمالمنسوبه')return i;
+                if(h.includes('اسم')&&(h.includes('معلم')||h.includes('موظف')||h.includes('منسوب')))return i;
+              }
+              return -1;
+            }
+            function optionalColumnIndex(row,type){
+              for(let i=0;i<row.length;i++){
+                const h=normImportHeader(row[i]);
+                if(type==='specialty'&&(h==='التخصص'||h.includes('تخصص')||h==='الماده'||h.includes('مادهالتدريس')))return i;
+                if(type==='rank'&&(h==='الرتبه'||h.includes('رتبه')||h.includes('المستويالمهني')))return i;
+                if(type==='stage'&&(h==='المرحله'||h.includes('مرحله')||h==='القسم'))return i;
+              }
+              return -1;
+            }
+            function extractTeacherRows(rows){
+              if(!Array.isArray(rows)||!rows.length)return [];
+              let header=-1,nameIdx=-1;
+              for(let r=0;r<Math.min(rows.length,100);r++){
+                const idx=nameColumnIndex(rows[r]||[]);
+                if(idx>=0){header=r;nameIdx=idx;break;}
+              }
+              if(header<0)return [];
+              const hdr=rows[header]||[];
+              const specialtyIdx=optionalColumnIndex(hdr,'specialty');
+              const rankIdx=optionalColumnIndex(hdr,'rank');
+              const stageIdx=optionalColumnIndex(hdr,'stage');
+              const out=[];
+              for(let r=header+1;r<rows.length;r++){
+                const row=rows[r]||[];
+                const name=String(row[nameIdx]??'').replace(/\\s+/g,' ').trim();
+                if(!name)continue;
+                const nk=normImportHeader(name);
+                if(nk==='الاسم'||nk.includes('الاجمالي')||nk==='المجموع')continue;
+                if(/^\\d+$/.test(name)||name.includes('@'))continue;
+                out.push({
+                  name,
+                  specialty:specialtyIdx>=0?String(row[specialtyIdx]??'').trim():'',
+                  rank:rankIdx>=0?String(row[rankIdx]??'').trim():'',
+                  stage:stageIdx>=0?String(row[stageIdx]??'').trim():''
+                });
+              }
+              return out;
+            }
+            window.importTeachers=async function(event){
+              const file=event.target.files&&event.target.files[0];
+              if(!file)return;
+              try{
+                if(!window.XLSX&&!/\\.csv$/i.test(file.name))throw new Error('xlsx-missing');
+                let parsed=[];
+                if(/\\.csv$/i.test(file.name)){
+                  const txt=await file.text();
+                  const lines=txt.replace(/^\\uFEFF/,'').split(/\\r?\\n/).filter(Boolean);
+                  const sample=lines.slice(0,10).join('\\n');
+                  const sep=(sample.match(/;/g)||[]).length>(sample.match(/,/g)||[]).length?';':',';
+                  const rows=lines.map(line=>line.split(sep));
+                  parsed=extractTeacherRows(rows);
+                }else{
+                  const buf=await file.arrayBuffer();
+                  const book=XLSX.read(buf,{type:'array',cellDates:false});
+                  for(const sheetName of book.SheetNames){
+                    const rows=XLSX.utils.sheet_to_json(book.Sheets[sheetName],{header:1,defval:'',raw:false,blankrows:true});
+                    const found=extractTeacherRows(rows);
+                    if(found.length>parsed.length)parsed=found;
+                  }
+                }
+                if(!parsed.length){alert('لم يتم العثور على عمود الاسم في الملف. يكفي وجود عنوان مثل «الإسم» أو «الاسم» أو «اسم المعلمة».');return;}
+                const existing=new Set(state.teachers.map(t=>normImportHeader(t.name)));
+                let added=0,skipped=0;
+                for(const t of parsed){
+                  const key=normImportHeader(t.name);
+                  if(!key||existing.has(key)){skipped++;continue;}
+                  existing.add(key);
+                  state.teachers.push({id:uid('teacher'),name:t.name,specialty:t.specialty||'',rank:t.rank||'',stage:t.stage||''});
+                  added++;
+                }
+                saveState();
+                alert(added?('تم استيراد '+added+' معلمة بنجاح.'+(skipped?' وتم تجاوز '+skipped+' اسمًا مكررًا.':'')):'جميع الأسماء الموجودة في الملف مضافة مسبقًا.');
+              }catch(err){
+                console.error(err);
+                alert(err&&err.message==='xlsx-missing'?'تعذر تشغيل قارئ Excel. أعيدي تحميل الصفحة ثم حاولي مرة أخرى.':'تعذر قراءة ملف Excel.');
+              }finally{event.target.value='';}
+            };
+          })();
+        `;
+        d.body.appendChild(importerPatch);
+      }catch(e){console.error('platform patch failed',e)}
     });
   </script>
 </body>
