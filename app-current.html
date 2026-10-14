@@ -223,6 +223,53 @@
     .sig-box .sig-image{display:block;max-width:43mm;max-height:16mm;object-fit:contain;margin:0 auto}
     .sig-name{display:block;width:100%;padding-top:5px;color:#486173;font-size:12px;line-height:1.7;text-align:center;white-space:normal;word-break:break-word}
     .print-footer-text{text-align:center;color:#687587;font-size:10px;line-height:1.8;padding:0 9mm 4mm}
+    /* إخراج PDF ثابت للجوال والكمبيوتر - نفس منطق الصفحة المرجعية الناجحة */
+    #printRoot.pdf-capture{
+      display:block!important;
+      position:fixed!important;
+      top:0!important;
+      left:0!important;
+      width:210mm!important;
+      height:297mm!important;
+      padding:0!important;
+      margin:0!important;
+      background:#fff!important;
+      overflow:hidden!important;
+      pointer-events:none!important;
+      z-index:-1!important;
+    }
+    #printRoot.pdf-capture.landscape-capture{
+      width:297mm!important;
+      height:210mm!important;
+    }
+    #printRoot.pdf-capture .print-page{
+      width:210mm!important;
+      height:297mm!important;
+      min-height:297mm!important;
+      max-height:297mm!important;
+      margin:0!important;
+      box-shadow:none!important;
+      overflow:hidden!important;
+      break-inside:avoid!important;
+      page-break-inside:avoid!important;
+    }
+    #printRoot.pdf-capture.landscape-capture .print-page.landscape{
+      width:297mm!important;
+      height:210mm!important;
+      min-height:210mm!important;
+      max-height:210mm!important;
+    }
+    #printRoot.pdf-capture .print-band{
+      width:100%!important;
+      height:100%!important;
+      object-fit:cover!important;
+      display:block!important;
+    }
+    #printRoot.pdf-capture *{
+      -webkit-print-color-adjust:exact;
+      print-color-adjust:exact;
+    }
+
     @media print{
       @page{size:A4 portrait;margin:0}
       html,body{width:210mm;height:297mm;background:#fff;margin:0;padding:0;overflow:hidden}
@@ -260,6 +307,8 @@
     }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 </head>
 <body>
   <div class="top-band"></div>
@@ -483,8 +532,101 @@ function renderReportDaySelect(){const p=getProgramById(reportAttendanceProgram.
 function renderAll(){enforceFixedSchool();renderDashboard();renderTeachers();renderPrograms();renderAttendance();renderCertificateCandidates();renderReportSelects()}
 function downloadImportTemplate(){const csv='اسم المعلمة,التخصص,الرتبة المهنية,المرحلة\n';const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='نموذج_استيراد_المعلمات.csv';a.click();URL.revokeObjectURL(a.href)}
 function normalizeHeader(v){return String(v||'').replace(/\s+/g,' ').trim().toLowerCase()}
-function detectHeaderRow(rows){const names=['اسم المعلمة','اسم المعلم','اسم المعلم/المعلمة','الاسم','الاسم الكامل','الاسم الرباعي'];for(let i=0;i<Math.min(rows.length,20);i++){const r=(rows[i]||[]).map(normalizeHeader);if(r.some(x=>names.includes(x)))return i}return-1}
-async function importTeachers(event){const file=event.target.files?.[0];if(!file)return;try{let sheets=[];if(/\.csv$/i.test(file.name)){const txt=await file.text();sheets=[txt.split(/\r?\n/).map(l=>l.split(','))]}else{const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array'});sheets=wb.SheetNames.map(n=>XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:''}))}let added=0;for(const rows of sheets){const hi=detectHeaderRow(rows);if(hi<0)continue;const headers=rows[hi].map(normalizeHeader);const find=(arr)=>headers.findIndex(h=>arr.includes(h));const ni=find(['اسم المعلمة','اسم المعلم','اسم المعلم/المعلمة','الاسم','الاسم الكامل','الاسم الرباعي']);const si=find(['التخصص','تخصص المعلمة','تخصص المعلم','تخصص المعلم/المعلمة','التخصص الدراسي','المادة','مادة التدريس']);const ri=find(['الرتبة','الرتبة المهنية','رتبة المعلمة','رتبة المعلم']);const gi=find(['المرحلة','المرحلة الدراسية','القسم']);for(let i=hi+1;i<rows.length;i++){const row=rows[i]||[],name=String(row[ni]||'').trim();if(!name)continue;if(state.teachers.some(t=>t.name===name))continue;state.teachers.push({id:uid('teacher'),name,specialty:si>=0?String(row[si]||'').trim():'',rank:ri>=0?String(row[ri]||'').trim():'',stage:gi>=0?String(row[gi]||'').trim():''});added++}}saveState();alert(added?`تم استيراد ${added} معلمة.`:'لم يتم العثور على أسماء قابلة للاستيراد.')}catch(e){alert('تعذر قراءة ملف الاستيراد.')}finally{event.target.value=''}}
+function normalizeImportHeader(v){
+  return String(v==null?'':v)
+    .replace(/[\u064B-\u065F\u0670]/g,'')
+    .replace(/ـ/g,'')
+    .replace(/[أإآ]/g,'ا')
+    .replace(/ى/g,'ي')
+    .replace(/ة/g,'ه')
+    .replace(/[\s\-_\/\\|:：.،,()\[\]{}]+/g,'')
+    .trim().toLowerCase();
+}
+function nameColumnIndex(row){
+  if(!Array.isArray(row))return -1;
+  for(let i=0;i<row.length;i++){
+    const h=normalizeImportHeader(row[i]);
+    if(!h)continue;
+    if(h==='الاسم'||h==='اسم'||h==='الاسمالكامل'||h==='الاسمالرباعي'||h==='اسمالمعلمه'||h==='اسمالمعلم'||h==='اسمالمعلمالمعلمه'||h==='اسمالموظفه'||h==='اسمالمنسوبه')return i;
+    if(h.includes('اسم')&&(h.includes('معلم')||h.includes('موظف')||h.includes('منسوب')))return i;
+  }
+  return -1;
+}
+function optionalColumnIndex(row,type){
+  for(let i=0;i<row.length;i++){
+    const h=normalizeImportHeader(row[i]);
+    if(type==='specialty'&&(h==='التخصص'||h.includes('تخصص')||h==='الماده'||h.includes('مادهالتدريس')))return i;
+    if(type==='rank'&&(h==='الرتبه'||h.includes('رتبه')||h.includes('المستويالمهني')))return i;
+    if(type==='stage'&&(h==='المرحله'||h.includes('مرحله')||h==='القسم'))return i;
+  }
+  return -1;
+}
+function extractTeacherRows(rows){
+  if(!Array.isArray(rows)||!rows.length)return [];
+  let header=-1,nameIdx=-1;
+  for(let r=0;r<Math.min(rows.length,100);r++){
+    const idx=nameColumnIndex(rows[r]||[]);
+    if(idx>=0){header=r;nameIdx=idx;break}
+  }
+  if(header<0)return [];
+  const hdr=rows[header]||[];
+  const specialtyIdx=optionalColumnIndex(hdr,'specialty');
+  const rankIdx=optionalColumnIndex(hdr,'rank');
+  const stageIdx=optionalColumnIndex(hdr,'stage');
+  const out=[];
+  for(let r=header+1;r<rows.length;r++){
+    const row=rows[r]||[];
+    const name=String(row[nameIdx]??'').replace(/\s+/g,' ').trim();
+    if(!name)continue;
+    const nk=normalizeImportHeader(name);
+    if(nk==='الاسم'||nk.includes('الاجمالي')||nk==='المجموع'||/^\d+$/.test(name)||name.includes('@'))continue;
+    out.push({
+      name,
+      specialty:specialtyIdx>=0?String(row[specialtyIdx]??'').trim():'',
+      rank:rankIdx>=0?String(row[rankIdx]??'').trim():'',
+      stage:stageIdx>=0?String(row[stageIdx]??'').trim():''
+    });
+  }
+  return out;
+}
+async function importTeachers(event){
+  const file=event.target.files?.[0];
+  if(!file)return;
+  try{
+    if(!window.XLSX&&!/\.csv$/i.test(file.name))throw new Error('xlsx-missing');
+    let parsed=[];
+    if(/\.csv$/i.test(file.name)){
+      const txt=await file.text();
+      const lines=txt.replace(/^\uFEFF/,'').split(/\r?\n/).filter(Boolean);
+      const sample=lines.slice(0,10).join('\n');
+      const sep=(sample.match(/;/g)||[]).length>(sample.match(/,/g)||[]).length?';':',';
+      parsed=extractTeacherRows(lines.map(line=>line.split(sep)));
+    }else{
+      const buf=await file.arrayBuffer();
+      const book=XLSX.read(buf,{type:'array',cellDates:false});
+      for(const sheetName of book.SheetNames){
+        const rows=XLSX.utils.sheet_to_json(book.Sheets[sheetName],{header:1,defval:'',raw:false,blankrows:true});
+        const found=extractTeacherRows(rows);
+        if(found.length>parsed.length)parsed=found;
+      }
+    }
+    if(!parsed.length)return alert('لم يتم العثور على عمود الاسم. يكفي وجود عنوان مثل «الإسم» أو «الاسم» أو «اسم المعلمة».');
+    const existing=new Set(state.teachers.map(t=>normalizeImportHeader(t.name)));
+    let added=0,skipped=0;
+    for(const t of parsed){
+      const key=normalizeImportHeader(t.name);
+      if(!key||existing.has(key)){skipped++;continue}
+      existing.add(key);
+      state.teachers.push({id:uid('teacher'),name:t.name,specialty:t.specialty||'',rank:t.rank||'',stage:t.stage||''});
+      added++;
+    }
+    saveState();
+    alert(added?('تم استيراد '+added+' معلمة بنجاح.'+(skipped?' وتم تجاوز '+skipped+' اسمًا مكررًا.':'')):'جميع الأسماء الموجودة في الملف مضافة مسبقًا.');
+  }catch(err){
+    console.error(err);
+    alert(err?.message==='xlsx-missing'?'تعذر تشغيل قارئ Excel. أعيدي تحميل الصفحة ثم حاولي مرة أخرى.':'تعذر قراءة ملف Excel.');
+  }finally{event.target.value=''}
+}
 function setupSignaturePad(canvasId,inputId,clearBtnId){const canvas=document.getElementById(canvasId),input=document.getElementById(inputId),btn=document.getElementById(clearBtnId);if(!canvas||canvas.dataset.ready)return;const ctx=canvas.getContext('2d');ctx.lineWidth=2.4;ctx.strokeStyle='#173c62';ctx.lineCap='round';let drawing=false;const pos=e=>{const r=canvas.getBoundingClientRect(),p=e.touches?e.touches[0]:e;return{x:(p.clientX-r.left)*canvas.width/r.width,y:(p.clientY-r.top)*canvas.height/r.height}};const start=e=>{drawing=true;const p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);e.preventDefault()};const move=e=>{if(!drawing)return;const p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke();e.preventDefault()};const end=()=>{if(!drawing)return;drawing=false;input.value=canvas.toDataURL('image/png');if(inputId==='facilitatorSignatureData')state.settings.facilitatorSignature=input.value;else state.settings.principalSignature=input.value;localStorage.setItem(STORAGE_KEY,JSON.stringify(state))};canvas.addEventListener('mousedown',start);canvas.addEventListener('mousemove',move);window.addEventListener('mouseup',end);canvas.addEventListener('touchstart',start,{passive:false});canvas.addEventListener('touchmove',move,{passive:false});window.addEventListener('touchend',end);btn.onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height);input.value='';if(inputId==='facilitatorSignatureData')state.settings.facilitatorSignature='';else state.settings.principalSignature='';localStorage.setItem(STORAGE_KEY,JSON.stringify(state))};canvas.dataset.ready='1'}
 function restoreCanvas(id,data){const c=document.getElementById(id);if(!c||!data)return;const img=new Image();img.onload=()=>{const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const r=Math.min((c.width-20)/img.width,(c.height-20)/img.height);ctx.drawImage(img,(c.width-img.width*r)/2,(c.height-img.height*r)/2,img.width*r,img.height*r)};img.src=data}
 function restoreSignaturePads(){restoreCanvas('facilitatorSignaturePad',state.settings.facilitatorSignature);restoreCanvas('principalSignaturePad',state.settings.principalSignature)}
@@ -493,10 +635,74 @@ function headerMarkup(title,subtitle=''){return`<div class="print-header"><div c
 function currentSignature(which){const input=which==='facilitator'?facilitatorSignatureData:principalSignatureData;return input?.value||state.settings[which==='facilitator'?'facilitatorSignature':'principalSignature']||''}
 function signatureMarkup(role,img,name){return`<div class="sig-box"><div class="sig-role">${escapeHtml(role)}</div><div class="sig-body"><div class="sig-image-wrap">${img?`<img class="sig-image" src="${img}">`:''}</div><div class="sig-name">${escapeHtml(name||'........................')}</div></div></div>`}
 function certSignatureMarkup(role,img,name){return`<div class="certificate-signature"><div class="cert-role-title">${escapeHtml(role)}</div><div class="cert-signature-space">${img?`<img src="${img}">`:''}</div><div class="cert-role-name">${escapeHtml(name||'........................')}</div></div>`}
-async function openPrint(html,landscape=false){printRoot.innerHTML=html;document.body.classList.add('printing');if(landscape)document.body.classList.add('print-landscape-page');const imgs=[...printRoot.querySelectorAll('img')];await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(r=>{img.onload=r;img.onerror=r})));setTimeout(()=>window.print(),200);const done=()=>{document.body.classList.remove('printing','print-landscape-page');printRoot.innerHTML='';window.removeEventListener('afterprint',done)};window.addEventListener('afterprint',done)}
+function waitForPrintImages(root){
+  const images=Array.from(root.querySelectorAll('img'));
+  return Promise.all(images.map(img=>{
+    if(img.complete&&img.naturalWidth>0)return img.decode?img.decode().catch(()=>{}):Promise.resolve();
+    return new Promise(resolve=>{
+      const done=()=>resolve();
+      img.addEventListener('load',done,{once:true});
+      img.addEventListener('error',done,{once:true});
+      setTimeout(done,1800);
+    });
+  }));
+}
+function safePdfName(name){
+  return String(name||'مستند-تدريبي')
+    .replace(/[\\/:*?"<>|]+/g,'-')
+    .replace(/\s+/g,' ')
+    .trim()
+    .slice(0,120)+'.pdf';
+}
+async function openPrint(html,landscape=false,fileName=''){
+  printRoot.innerHTML=html;
+  printRoot.classList.add('pdf-capture');
+  printRoot.classList.toggle('landscape-capture',!!landscape);
+  try{
+    if(document.fonts&&document.fonts.ready)await document.fonts.ready;
+    await waitForPrintImages(printRoot);
+    if(typeof html2canvas==='undefined'||!window.jspdf)throw new Error('pdf-libraries-missing');
+
+    const pages=Array.from(printRoot.querySelectorAll('.print-page'));
+    if(!pages.length)throw new Error('no-print-page');
+
+    const {jsPDF}=window.jspdf;
+    const orientation=landscape?'landscape':'portrait';
+    const pageW=landscape?297:210;
+    const pageH=landscape?210:297;
+    const pdf=new jsPDF({orientation,unit:'mm',format:'a4',compress:true});
+    const scale=Math.max(2,Math.min(3,window.devicePixelRatio||2));
+
+    for(let i=0;i<pages.length;i++){
+      const target=pages[i];
+      const rendered=await html2canvas(target,{
+        scale,
+        useCORS:true,
+        allowTaint:true,
+        backgroundColor:'#ffffff',
+        logging:false,
+        windowWidth:target.scrollWidth,
+        windowHeight:target.scrollHeight,
+        scrollX:0,
+        scrollY:0
+      });
+      if(i>0)pdf.addPage('a4',orientation);
+      const imgData=rendered.toDataURL('image/jpeg',0.96);
+      pdf.addImage(imgData,'JPEG',0,0,pageW,pageH,undefined,'FAST');
+    }
+
+    pdf.save(safePdfName(fileName||(landscape?'شهادة-حضور':'مستند-تدريبي')));
+  }catch(error){
+    console.error(error);
+    alert('تعذر توليد ملف PDF. تأكدي من اتصال الإنترنت لتحميل مكتبات PDF ثم أعيدي المحاولة.');
+  }finally{
+    printRoot.classList.remove('pdf-capture','landscape-capture');
+    printRoot.innerHTML='';
+  }
+}
 function printAttendanceSheet(){const p=getProgramById(reportAttendanceProgram.value),day=reportAttendanceDay.value;if(!p||!day)return alert('اختاري البرنامج واليوم.');normalizeProgramAttendance(p);const map=p.attendanceDays[day]||{},dayDate=programDayDate(p,day);const rows=state.teachers.map((t,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(t.name)}</td><td>${escapeHtml(t.specialty||'—')}</td><td>${escapeHtml(t.rank||'—')}</td><td>${Object.prototype.hasOwnProperty.call(map,t.id)?(map[t.id]?'حاضرة':'غائبة'):'غير مسجل'}</td><td></td></tr>`).join('');openPrint(`<div class="print-page"><img class="print-band" src="background4.jpg"><div class="print-content">${headerMarkup('كشف حضور برنامج تدريبي',p.name+' — اليوم '+day+(dayDate?' — '+formatDateAr(dayDate):''))}<table class="print-info"><tr><th>اسم البرنامج</th><td>${escapeHtml(p.name)}</td><th>المنفذة</th><td>${escapeHtml(p.facilitator||'—')}</td></tr><tr><th>اليوم</th><td>${day} من ${p.days}${dayDate?' — '+formatDateAr(dayDate):''}</td><th>إجمالي الساعات</th><td>${p.hours||0}</td></tr><tr><th>فترة البرنامج</th><td colspan="3">${escapeHtml(programDateRangeText(p))}</td></tr></table><table class="print-table"><thead><tr><th>م</th><th>الاسم</th><th>التخصص</th><th>الرتبة</th><th>الحالة</th><th>التوقيع</th></tr></thead><tbody>${rows}</tbody></table><div class="print-signatures">${signatureMarkup('منفذة البرنامج',currentSignature('facilitator'),p.facilitator)}${signatureMarkup('مديرة المدرسة',currentSignature('principal'),FIXED_SCHOOL.principalName)}</div></div><div><img class="print-band" src="background5.jpg"></div></div>`)}
 function printCertificate(){const p=getProgramById(certificateProgramSelect.value),t=getTeacherById(certificateTeacherSelect.value);if(!p||!t)return alert('اختاري البرنامج والمعلمة.');const st=teacherAttendanceStats(p,t.id);if(!st.eligible)return alert('هذه المعلمة لا تستحق الشهادة وفق نسبة الحضور.');openPrint(`<div class="print-page landscape"><img class="print-band" src="background4.jpg"><div class="print-content">${headerMarkup('شهادة حضور برنامج تدريبي')}<div class="certificate-shell"><div class="certificate-card"><div class="cert-mark"></div><div class="cert-title">شهادة حضور برنامج تدريبي</div><div class="cert-intro">تتشرف <strong>${escapeHtml(FIXED_SCHOOL.schoolName)}</strong><br>بمنح هذه الشهادة إلى</div><div class="cert-name">${escapeHtml(t.name)}</div><div class="cert-body">لحضورها برنامج <b>«${escapeHtml(p.name)}»</b><br>بواقع <b>${p.hours||0}</b> ساعة تدريبية خلال <b>${p.days||1}</b> يوم<br><b>${escapeHtml(programDateRangeText(p))}</b>.</div><div class="cert-meta"><span>الحضور ${Math.round(st.attendanceRate*100)}٪</span><span>${escapeHtml(programDateRangeText(p))}</span></div><div class="certificate-signs">${certSignatureMarkup('منفذة البرنامج',currentSignature('facilitator'),p.facilitator)}${certSignatureMarkup('مديرة المدرسة',currentSignature('principal'),FIXED_SCHOOL.principalName)}</div></div></div></div><div><img class="print-band" src="background5.jpg"></div></div>`,true)}
-function printProgramReport(){const p=getProgramById(reportProgramSelect.value);if(!p)return alert('اختاري البرنامج.');const eligible=state.teachers.filter(t=>teacherAttendanceStats(p,t.id).eligible).length;const html=`<div class="print-page"><img class="print-band" src="background4.jpg"><div class="print-content">${headerMarkup('تقرير تنفيذ برنامج تدريبي',p.name)}<table class="print-info"><tr><th>البرنامج</th><td>${escapeHtml(p.name)}</td><th>المنفذة</th><td>${escapeHtml(p.facilitator||'—')}</td></tr><tr><th>المدة</th><td>${p.days||1} يوم</td><th>الساعات</th><td>${p.hours||0}</td></tr><tr><th>فترة التنفيذ</th><td colspan="3">${escapeHtml(programDateRangeText(p))}</td></tr><tr><th>المستحقات للشهادة</th><td>${eligible}</td><th>الفئة المستهدفة</th><td>${escapeHtml(p.target||'—')}</td></tr></table><table class="print-table"><thead><tr><th>العنصر</th><th>البيان</th></tr></thead><tbody><tr><td>وصف البرنامج</td><td>${escapeHtml(p.description||'—')}</td></tr><tr><td>ملاحظات</td><td>....................................................................................................</td></tr><tr><td>التوصيات</td><td>....................................................................................................</td></tr></tbody></table><div class="print-signatures">${signatureMarkup('منفذة البرنامج',currentSignature('facilitator'),p.facilitator)}${signatureMarkup('مديرة المدرسة',currentSignature('principal'),FIXED_SCHOOL.principalName)}</div></div><div><img class="print-band" src="background5.jpg"></div></div>`;openPrint(html)}
+function printProgramReport(){const p=getProgramById(reportProgramSelect.value);if(!p)return alert('اختاري البرنامج.');const eligible=state.teachers.filter(t=>teacherAttendanceStats(p,t.id).eligible).length;const html=`<div class="print-page"><img class="print-band" src="background4.jpg"><div class="print-content">${headerMarkup('تقرير تنفيذ برنامج تدريبي',p.name)}<table class="print-info"><tr><th>البرنامج</th><td>${escapeHtml(p.name)}</td><th>المنفذة</th><td>${escapeHtml(p.facilitator||'—')}</td></tr><tr><th>المدة</th><td>${p.days||1} يوم</td><th>الساعات</th><td>${p.hours||0}</td></tr><tr><th>فترة التنفيذ</th><td colspan="3">${escapeHtml(programDateRangeText(p))}</td></tr><tr><th>المستحقات للشهادة</th><td>${eligible}</td><th>الفئة المستهدفة</th><td>${escapeHtml(p.target||'—')}</td></tr></table><table class="print-table"><thead><tr><th>العنصر</th><th>البيان</th></tr></thead><tbody><tr><td>وصف البرنامج</td><td>${escapeHtml(p.description||'—')}</td></tr><tr><td>ملاحظات</td><td>....................................................................................................</td></tr><tr><td>التوصيات</td><td>....................................................................................................</td></tr></tbody></table><div class="print-signatures">${signatureMarkup('منفذة البرنامج',currentSignature('facilitator'),p.facilitator)}${signatureMarkup('مديرة المدرسة',currentSignature('principal'),FIXED_SCHOOL.principalName)}</div></div><div><img class="print-band" src="background5.jpg"></div></div>`;openPrint(html,false,`تقرير برنامج - ${p.name}`)}
 document.querySelectorAll('#sideNav button').forEach(b=>b.addEventListener('click',()=>switchPage(b.dataset.page)));
 window.addEventListener('DOMContentLoaded',()=>{loadState();populateTeacherSelectors();loadForms();initSignaturePads();renderAll()});
 </script>
